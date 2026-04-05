@@ -175,7 +175,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 33650764}
   serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: -0.8881791, w: 0.45949742}
+  m_LocalRotation: {x: 0, y: 0, z: -0.8881792, w: 0.45949724}
   m_LocalPosition: {x: 0.08282472, y: 0.0077768373, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
@@ -303,8 +303,8 @@ Transform:
   m_GameObject: {fileID: 234974827}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0.01, y: -3.86, z: 0}
-  m_LocalScale: {x: 17.596, y: 2.0638, z: 1}
+  m_LocalPosition: {x: -8.2188, y: -3.86, z: 0}
+  m_LocalScale: {x: 68.059616, y: 2.0638, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
@@ -379,7 +379,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 263726468}
   serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0.79756695, w: 0.60323054}
+  m_LocalRotation: {x: 0, y: 0, z: 0.7975672, w: 0.6032302}
   m_LocalPosition: {x: 0.097543605, y: -0.0057892725, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
@@ -443,7 +443,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 340022251}
   serializedVersion: 2
-  m_LocalRotation: {x: -0, y: -0, z: 0.0006684064, w: 0.99999976}
+  m_LocalRotation: {x: -0, y: -0, z: 0.00066816807, w: 0.9999998}
   m_LocalPosition: {x: 0.0927, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
@@ -610,7 +610,7 @@ Transform:
   m_GameObject: {fileID: 408712886}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -3.28, y: -1.25, z: 0}
+  m_LocalPosition: {x: -13.93, y: -1.25, z: 0}
   m_LocalScale: {x: 8, y: 8, z: 8}
   m_ConstrainProportionsScale: 1
   m_Children:
@@ -717,13 +717,13 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6ba429caf63e37a4484b5b52da026b16, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::AlienPhysicsBody
-  bodyMass: 1
+  bodyMass: 4
   gravityScale: 1.8
-  grippedLinearDrag: 1
-  freeLinearDrag: 0
-  angularDrag: 1
+  grippedLinearDrag: 2.5
+  freeLinearDrag: 0.6
+  angularDrag: 6
   groundCheck: {fileID: 72385952}
-  groundCheckRadius: 0.34
+  groundCheckRadius: 0.28
   groundLayer:
     serializedVersion: 2
     m_Bits: 8
@@ -741,16 +741,14 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::TorsoController
   torsoTransform: {fileID: 1242176864}
   physicsBody: {fileID: 408712893}
-  effortTiltScale: 0.8
-  maxEffortTilt: 30
-  verticalTiltScale: 0.5
-  maxVerticalTilt: 20
-  velocityTiltScale: 0.4
+  torqueScale: 0.5
+  maxTorqueTilt: 28
+  velocityTiltScale: 0.3
   maxVelocityTilt: 20
-  smoothTime: 0.353
-  maxTiltSpeed: 80
-  idleSwayAmplitude: 3
-  idleSwayFrequency: 0.6
+  smoothTime: 0.12
+  maxTiltSpeed: 120
+  idleSwayAmplitude: 2.5
+  idleSwayFrequency: 0.5
 --- !u!114 &408712896
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -767,15 +765,15 @@ MonoBehaviour:
   footBack: {fileID: 1882390641}
   pelvis: {fileID: 72385952}
   physicsBody: {fileID: 408712893}
-  legFrictionForce: 2
-  maxLegFriction: 4
+  legFrictionForce: 2.5
+  maxLegFriction: 4.5
   footRaycastDist: 0.4
   groundLayer:
     serializedVersion: 2
     m_Bits: 8
   pelvisTiltScale: 18
   maxPelvisTilt: 28
-  pelvisTiltSmoothing: 5
+  pelvisTiltSmoothing: 6
 --- !u!114 &408712897
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -800,17 +798,20 @@ MonoBehaviour:
   surfaceLayer:
     serializedVersion: 2
     m_Bits: 8
-  surfacePenetrationOffset: 0.114
+  surfacePenetrationOffset: 0
   ikFollowSpeed: 14
-  restLengthRatio: 0.65
-  extensionLockRatio: 0.92
-  compressionGain: 24.23
-  maxStoredEnergy: 1200
-  energyReleaseRate: 0.25
-  forceMultiplier: 12.23
-  verticalForceFraction: 0.191
-  verticalForceBoost: 1.4
-  minEnergyToRelease: 0.5
+  windupStartThreshold: 0.08
+  minWindupDistance: 0.2
+  maxWindupDistance: 0.8
+  releaseThreshold: 0.08
+  cooldownTime: 0.3
+  windupCancelSpeed: 0.06
+  impulseGainPerUnit: 15
+  maxImpulse: 12
+  verticalBoost: 2.2
+  armDirectionWeight: 0.55
+  extensionLockRatio: 0.88
+  restLengthRatio: 0.6
   effortWeight: 1
 --- !u!114 &408712898
 MonoBehaviour:
@@ -829,24 +830,27 @@ MonoBehaviour:
   ikTarget: {fileID: 405313471}
   physicsBody: {fileID: 408712893}
   torsoController: {fileID: 408712895}
-  mouseButton: 1
-  probeRadius: 0.02
+  mouseButton: 0
+  probeRadius: 0.08
   maxReach: 2.4
   minReach: 0.3
   surfaceLayer:
     serializedVersion: 2
     m_Bits: 8
-  surfacePenetrationOffset: 0.399
+  surfacePenetrationOffset: 0.12
   ikFollowSpeed: 14
-  restLengthRatio: 0.65
-  extensionLockRatio: 0.92
-  compressionGain: 8
-  maxStoredEnergy: 25
-  energyReleaseRate: 0.25
-  forceMultiplier: 1
-  verticalForceFraction: 0.936
-  verticalForceBoost: 1.4
-  minEnergyToRelease: 0.5
+  windupStartThreshold: 0.08
+  minWindupDistance: 0.2
+  maxWindupDistance: 0.8
+  releaseThreshold: 0.08
+  cooldownTime: 0.3
+  windupCancelSpeed: 0.06
+  impulseGainPerUnit: 15
+  maxImpulse: 12
+  verticalBoost: 2.2
+  armDirectionWeight: 0.55
+  extensionLockRatio: 0.88
+  restLengthRatio: 0.6
   effortWeight: 1
 --- !u!114 &408712899
 MonoBehaviour:
@@ -970,7 +974,7 @@ Camera:
   far clip plane: 1000
   field of view: 34
   orthographic: 1
-  orthographic size: 5
+  orthographic size: 10.55
   m_Depth: -1
   m_CullingMask:
     serializedVersion: 2

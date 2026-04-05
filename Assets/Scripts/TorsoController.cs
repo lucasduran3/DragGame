@@ -1,8 +1,18 @@
 ﻿using UnityEngine;
 
 /// <summary>
-/// TorsoController v3 — inclinación procedural del hueso Torso.
-/// Ejecuta en LateUpdate para sobreescribir después del IK Manager.
+/// TorsoController v4 — inclinación procedural con torque por punto de apoyo.
+///
+/// NUEVO EN v4:
+///   - ReceiveEffort acepta ahora el vector de fuerza completo + gripOffset
+///     (posición relativa del punto de apoyo respecto al hombro).
+///   - El torque se calcula como el producto cruzado 2D de gripOffset × force,
+///     lo que produce una rotación coherente con la física real:
+///       · apoyo adelante + empuje hacia atrás → torso se inclina hacia adelante
+///       · apoyo abajo + empuje hacia arriba → torso se erguye
+///   - Se mantiene el balanceo de reposo (idle sway) y el damping suave.
+///   - Se añade un límite de tasa de cambio (maxTiltSpeed) para evitar
+///     rotaciones instantáneas antiestéticas.
 /// </summary>
 public class TorsoController : MonoBehaviour
 {
@@ -12,16 +22,12 @@ public class TorsoController : MonoBehaviour
     [Header("Referencia al cuerpo físico")]
     public AlienPhysicsBody physicsBody;
 
-    [Header("Inclinación por esfuerzo horizontal")]
-    public float effortTiltScale = 0.8f;
-    [Range(0f, 50f)]
-    public float maxEffortTilt = 35f;
-
-    [Header("Inclinación por esfuerzo vertical (levantamiento)")]
-    [Tooltip("Cuando hay fuerza hacia arriba, el torso se comprime/estira hacia arriba.")]
-    public float verticalTiltScale = 0.5f;
-    [Range(0f, 30f)]
-    public float maxVerticalTilt = 20f;
+    [Header("Torque por punto de apoyo")]
+    [Tooltip("Escala el torque calculado como gripOffset × force. " +
+             "Recomendado: 0.4 – 1.2.")]
+    public float torqueScale = 0.7f;
+    [Range(0f, 60f)]
+    public float maxTorqueTilt = 40f;
 
     [Header("Inclinación por velocidad del cuerpo (inercia)")]
     public float velocityTiltScale = 0.4f;
@@ -40,15 +46,37 @@ public class TorsoController : MonoBehaviour
     // ── Estado interno ─────────────────────────────────────────────────────
     private float currentTiltZ = 0f;
     private float tiltVelocity = 0f;
-    private Vector2 accumulatedEffort;
-    private bool anyArmGripped;
+
+    // Acumuladores por frame (reseteados en LateUpdate)
+    private float accumulatedTorque = 0f;
+    private bool anyArmGripped = false;
+    private bool anyArmPushing = false;
 
     // ──────────────────────────────────────────────────────────────────────
-    public void ReceiveEffort(Vector2 effort, bool gripped)
+    /// <summary>
+    /// Llamado por cada ArmProbe en FixedUpdate.
+    /// force      = fuerza aplicada al cuerpo en ese frame.
+    /// gripped    = ¿el brazo está agarrado?
+    /// gripOffset = gripPoint - shoulderPos (vector 2D del brazo al apoyo).
+    /// </summary>
+    public void ReceiveEffort(Vector2 force, bool gripped, Vector2 gripOffset = default)
     {
-        accumulatedEffort += effort;
         if (gripped) anyArmGripped = true;
+
+        if (force.sqrMagnitude > 0.001f)
+        {
+            anyArmPushing = true;
+
+            // Torque 2D: componente Z del producto cruzado (gripOffset × force)
+            // Signo positivo → inclinación en sentido horario (en Unity 2D, negativo = derecha)
+            float torque2D = gripOffset.x * force.y - gripOffset.y * force.x;
+            accumulatedTorque += torque2D;
+        }
     }
+
+    // Compatibilidad con firma anterior (sin gripOffset)
+    public void ReceiveEffort(Vector2 force, bool gripped)
+        => ReceiveEffort(force, gripped, Vector2.zero);
 
     void LateUpdate()
     {
@@ -63,32 +91,30 @@ public class TorsoController : MonoBehaviour
         euler.z = currentTiltZ;
         torsoTransform.localEulerAngles = euler;
 
-        accumulatedEffort = Vector2.zero;
+        // Reset acumuladores
+        accumulatedTorque = 0f;
         anyArmGripped = false;
+        anyArmPushing = false;
     }
 
     float ComputeTargetTilt()
     {
         float tilt = 0f;
 
-        // 1. Esfuerzo horizontal de los brazos
-        float effortTilt = accumulatedEffort.x * effortTiltScale;
-        tilt += Mathf.Clamp(effortTilt, -maxEffortTilt, maxEffortTilt);
+        // 1. Torque por punto de apoyo
+        float torqueTilt = Mathf.Clamp(
+            accumulatedTorque * torqueScale,
+            -maxTorqueTilt, maxTorqueTilt);
+        tilt += torqueTilt;
 
-        // 2. Esfuerzo vertical (levantarse): inclina el torso hacia arriba
-        //    Cuando el alien se empuja hacia arriba, el torso se "erguye"
-        //    ligeramente (inclinación negativa = hacia adelante en Unity 2D)
-        float vertTilt = -accumulatedEffort.y * verticalTiltScale;
-        tilt += Mathf.Clamp(vertTilt, -maxVerticalTilt, maxVerticalTilt);
-
-        // 3. Inercia por velocidad horizontal del cuerpo
+        // 2. Inercia por velocidad horizontal del cuerpo
         if (physicsBody != null)
         {
             float velTilt = -physicsBody.Velocity.x * velocityTiltScale;
             tilt += Mathf.Clamp(velTilt, -maxVelocityTilt, maxVelocityTilt);
         }
 
-        // 4. Balanceo de reposo
+        // 3. Balanceo de reposo
         bool idle = physicsBody == null ||
                     (physicsBody.Velocity.magnitude < 0.25f && !anyArmGripped);
         if (idle)

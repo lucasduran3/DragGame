@@ -1,24 +1,28 @@
 ﻿using UnityEngine;
 
 /// <summary>
-/// ArmProbe v5 — sistema de compresión / extensión.
+/// ArmProbe v9 — impulsos discretos por gesto de windup/release.
 ///
-/// MODELO ANTERIOR (v4): la fuerza venía del delta del mouse → irreal.
-/// MODELO NUEVO (v5):    la fuerza viene del cambio de longitud del brazo.
+/// MODELO FUNDAMENTAL:
+///   La fuerza ya no es continua. Cada empuje es un evento discreto
+///   que requiere completar un ciclo de gesto en dos fases:
 ///
-/// Ciclo de un empuje:
-///   1. ALCANZAR    — el IK target se posiciona en la superficie detectada.
-///   2. AGARRAR     — el jugador presiona el botón; el target se clava en el mundo.
-///   3. COMPRIMIR   — el cuerpo se acerca a la mano fija → el brazo se flexiona
-///                    → se acumula energía proporcional a la compresión.
-///   4. EXTENDER    — el cuerpo se aleja de la mano → el brazo se extiende
-///                    → la energía acumulada se libera como impulso.
-///   5. SOLTAR      — el jugador suelta el botón; el brazo queda libre.
+///   WINDUP:  el mouse se aleja del hombro mientras el brazo está agarrado.
+///            Se acumula windupDistance (distancia recorrida en esa dirección).
 ///
-/// Condiciones que BLOQUEAN la fuerza:
-///   - Sin contacto con superficie.
-///   - Brazo completamente extendido (ratio >= extensionLockRatio) sin compresión previa.
-///   - Energía acumulada = 0 (no hubo fase de compresión).
+///   RELEASE: el mouse invierte y se acerca al hombro.
+///            Cuando el mouse recorre releaseThreshold unidades de vuelta,
+///            se dispara UN ÚNICO impulso proporcional al windup acumulado.
+///            El brazo entra en Cooldown y no puede generar fuerza hasta
+///            que expire cooldownTime, independientemente del movimiento del mouse.
+///
+/// POR QUÉ ESTO CIERRA EL EXPLOIT:
+///   - "Seguir al personaje con el mouse" no aleja el mouse del hombro
+///     en términos absolutos de mundo; si el personaje se mueve y el mouse
+///     lo sigue, la distancia mouse-hombro cambia poco → no hay windup real.
+///   - Incluso si se logra hacer windup, el cooldown bloquea cualquier fuerza
+///     siguiente hasta que el timer expire, eliminando la fuerza continua.
+///   - El impulso es proporcional al windup: gestos pequeños = impulsos pequeños.
 /// </summary>
 public class ArmProbe : MonoBehaviour
 {
@@ -44,57 +48,94 @@ public class ArmProbe : MonoBehaviour
     public float maxReach = 2.4f;
     public float minReach = 0.3f;
     public LayerMask surfaceLayer;
-
-    [Tooltip("Offset de penetración en la superficie. Brazo frontal: 0. Trasero: 0.15-0.3.")]
     [Range(0f, 0.5f)]
     public float surfacePenetrationOffset = 0f;
 
-    [Header("Suavizado del IK target")]
+    [Header("Suavizado IK target")]
     [Range(4f, 30f)]
     public float ikFollowSpeed = 14f;
 
-    // ── Modelo de compresión / extensión ───────────────────────────────────
-    [Header("Compresión y extensión")]
+    // ── Gesto de windup / release ──────────────────────────────────────────
+    [Header("Gesto windup / release")]
 
     [Tooltip(
-        "Fracción de maxReach a partir de la cual el brazo se considera 'en reposo'. " +
-        "Por debajo → compresión. Por encima → extensión.")]
-    [Range(0.3f, 0.9f)]
-    public float restLengthRatio = 0.65f;
+        "Distancia mínima (unidades mundo) que el mouse debe alejarse del hombro " +
+        "para iniciar la fase de windup. Evita activaciones accidentales.\n" +
+        "Recomendado: 0.10 – 0.20.")]
+    [Range(0.05f, 0.5f)]
+    public float windupStartThreshold = 0.12f;
 
     [Tooltip(
-        "Si el ratio longitud/maxReach supera este valor y no hay energía acumulada, " +
-        "el brazo está demasiado extendido para generar fuerza. " +
-        "Recomiendado: 0.90-0.95.")]
-    [Range(0.7f, 1.0f)]
-    public float extensionLockRatio = 0.92f;
-
-    [Tooltip("Cuánta energía se acumula por unidad de compresión (distancia en unidades Unity).")]
-    public float compressionGain = 8f;
-
-    [Tooltip("Energía máxima acumulable en un solo agarre.")]
-    public float maxStoredEnergy = 25f;
+        "Distancia mínima de windup acumulada (unidades mundo) para que el " +
+        "release genere impulso. Debajo de este valor → gesto cancelado sin fuerza.\n" +
+        "Recomendado: 0.15 – 0.40.")]
+    [Range(0.05f, 1.0f)]
+    public float minWindupDistance = 0.20f;
 
     [Tooltip(
-        "Fracción de la energía almacenada que se convierte en fuerza por frame durante " +
-        "la extensión. Valores altos = impulso rápido y brusco. Bajos = suave y sostenido.")]
-    [Range(0.05f, 0.6f)]
-    public float energyReleaseRate = 0.25f;
-
-    [Tooltip("Multiplicador final sobre la fuerza liberada.")]
-    public float forceMultiplier = 1f;
+        "Distancia máxima de windup. El exceso se descarta (cap de fuerza).\n" +
+        "Recomendado: 0.5 – 1.2.")]
+    [Range(0.2f, 2.0f)]
+    public float maxWindupDistance = 0.80f;
 
     [Tooltip(
-        "Fracción de la fuerza total que se aplica en la dirección normal a la superficie " +
-        "(levantamiento vertical). 0 = solo tangente. 0.5 = mezcla. 1 = solo perpendicular.")]
+        "Distancia que el mouse debe recorrer de vuelta hacia el hombro para " +
+        "disparar el impulso. Umbral de release.\n" +
+        "Recomendado: 0.08 – 0.20.")]
+    [Range(0.02f, 0.5f)]
+    public float releaseThreshold = 0.12f;
+
+    [Tooltip(
+        "Tiempo en segundos durante el cual el brazo no puede iniciar un nuevo " +
+        "windup después de haber disparado un impulso. Elimina la fuerza continua.\n" +
+        "Recomendado: 0.15 – 0.35.")]
+    [Range(0.05f, 1.0f)]
+    public float cooldownTime = 0.22f;
+
+    [Tooltip(
+        "Si el mouse se detiene durante el windup (velocidad menor a este valor), " +
+        "el windup se cancela y el brazo vuelve a Idle sin impulso.\n" +
+        "Recomendado: 0.04 – 0.10.")]
+    [Range(0.01f, 0.3f)]
+    public float windupCancelSpeed = 0.06f;
+
+    // ── Magnitud del impulso ───────────────────────────────────────────────
+    [Header("Magnitud del impulso")]
+
+    [Tooltip("Fuerza por unidad de windupDistance acumulada.")]
+    public float impulseGainPerUnit = 20f;
+
+    [Tooltip("Impulso máximo (clampeado antes de aplicar).")]
+    public float maxImpulse = 30f;
+
+    [Tooltip(
+        "Boost sobre la componente Y del impulso. " +
+        "Compensa la gravedad para facilitar el salto. Recomendado: 1.3 – 2.0.")]
+    [Range(0.5f, 3f)]
+    public float verticalBoost = 1.5f;
+
+    // ── Dirección del impulso ──────────────────────────────────────────────
+    [Header("Dirección del impulso")]
+
+    [Tooltip(
+        "Peso de la dirección del brazo (gripPoint→shoulder) en la mezcla con " +
+        "la dirección del gesto del mouse. 1 = solo brazo. 0 = solo mouse.\n" +
+        "Recomendado: 0.5 – 0.7.")]
     [Range(0f, 1f)]
-    public float verticalForceFraction = 0.5f;
+    public float armDirectionWeight = 0.55f;
 
-    [Tooltip("Boost adicional sobre la componente normal (para que sea más fácil levantarse).")]
-    public float verticalForceBoost = 1.3f;
+    // ── Requisito de compresión ────────────────────────────────────────────
+    [Header("Requisito de compresión")]
 
-    [Tooltip("Energía mínima para poder liberar fuerza (evita microfuerzas por ruido).")]
-    public float minEnergyToRelease = 0.5f;
+    [Tooltip("Ratio de extensión a partir del cual el brazo está demasiado " +
+             "extendido para hacer windup. El gesto se ignora.")]
+    [Range(0.6f, 1.0f)]
+    public float extensionLockRatio = 0.88f;
+
+    [Tooltip("Longitud de reposo del brazo (fracción de maxReach). " +
+             "La eficiencia del impulso se escala por cuánto comprimido está el brazo.")]
+    [Range(0.3f, 0.9f)]
+    public float restLengthRatio = 0.60f;
 
     // ── Feedback al torso ──────────────────────────────────────────────────
     [Header("Feedback al torso")]
@@ -103,73 +144,105 @@ public class ArmProbe : MonoBehaviour
 
     // ── Estado público ─────────────────────────────────────────────────────
     public bool IsGripped { get; private set; }
-    public float StoredEnergy { get; private set; }
-    public float CurrentArmRatio { get; private set; }  // 0=colapsado, 1=extendido
-    public ArmPhase CurrentPhase { get; private set; }
+    public float CurrentArmRatio { get; private set; }
+    public PushPhase CurrentPhase { get; private set; }
+    public float WindupProgress { get; private set; }   // 0–1, para HUD
+    public float LastImpulse { get; private set; }
 
-    public enum ArmPhase { Free, Reaching, Compressing, Extending, Locked }
+    public enum PushPhase { Free, Reaching, Idle, Windup, Release, Cooldown, Locked }
 
     // ── Privadas ───────────────────────────────────────────────────────────
     private Vector2 gripPoint;
     private Vector2 gripNormal;
     private Vector3 smoothedTargetPos;
-    private float prevArmLength;
     private Camera mainCam;
-
     private bool buttonHeld;
-    private Vector3 currentMouseWorld;
+
+    // Posición del mouse en mundo, frame anterior (FixedUpdate)
+    private Vector2 prevMouseWorld;
+
+    // Distancia mouse–hombro en el frame anterior (para detectar alejamiento/acercamiento)
+    private float prevMouseShoulderDist;
+
+    // Acumulador de windup
+    private float windupDistance;
+
+    // Distancia devuelta desde el pico del windup (para detectar release)
+    private float releaseProgress;
+
+    // Distancia máxima del mouse al hombro alcanzada en este windup
+    private float windupPeakDist;
+
+    // Timer de cooldown
+    private float cooldownTimer;
+
+    // Velocidad del mouse (suavizada, para detección de pausa)
+    private Vector2 smoothedMouseVel;
 
     // ──────────────────────────────────────────────────────────────────────
     void Start()
     {
         mainCam = Camera.main;
-        if (ikTarget != null)
-            smoothedTargetPos = ikTarget.position;
-        prevArmLength = maxReach * restLengthRatio;
+        if (ikTarget != null) smoothedTargetPos = ikTarget.position;
+        prevMouseWorld = GetMouseWorldPos2D();
     }
 
     void Update()
     {
         buttonHeld = Input.GetMouseButton(mouseButton);
-        currentMouseWorld = GetMouseWorldPos();
     }
 
     void FixedUpdate()
     {
         if (shoulder == null || ikTarget == null || physicsBody == null) return;
 
-
-        // ── Dirección del probe ────────────────────────────────────────────
         Vector2 shoulderPos = shoulder.position;
-        Vector3 mouseWorld = GetMouseWorldPos();
-        Vector2 toMouse = (Vector2)mouseWorld - shoulderPos;
+        Vector2 mouseWorldNow = GetMouseWorldPos2D();
+
+        // ── Velocidad del mouse (suavizada) ───────────────────────────────
+        Vector2 rawVel = (mouseWorldNow - prevMouseWorld) / Time.fixedDeltaTime;
+        smoothedMouseVel = Vector2.Lerp(smoothedMouseVel, rawVel, 0.35f);
+        prevMouseWorld = mouseWorldNow;
+
+        // ── Distancia mouse–hombro actual ─────────────────────────────────
+        float mouseShoulderDist = Vector2.Distance(mouseWorldNow, shoulderPos);
+
+        // ── Probe ──────────────────────────────────────────────────────────
+        Vector2 toMouse = mouseWorldNow - shoulderPos;
         float dist = Mathf.Clamp(toMouse.magnitude, minReach, maxReach);
         Vector2 probeDir = toMouse.sqrMagnitude > 0.0001f
-                                ? toMouse.normalized
-                                : Vector2.right;
+                                    ? toMouse.normalized : Vector2.right;
 
-        // ── CircleCast ────────────────────────────────────────────────────
         RaycastHit2D hit = Physics2D.CircleCast(
             shoulderPos, probeRadius, probeDir, dist, surfaceLayer);
         bool surfaceHit = hit.collider != null;
 
-        // ── Longitud actual del brazo ──────────────────────────────────────
-        float currentArmLength = Vector2.Distance(shoulderPos, (Vector2)ikTarget.position);
-        CurrentArmRatio = currentArmLength / maxReach;
+        // ── Ratio de extensión del brazo ──────────────────────────────────
+        float armLen = Vector2.Distance(shoulderPos, (Vector2)ikTarget.position);
+        CurrentArmRatio = armLen / maxReach;
+
+        // Factor de compresión: 1 en reposo o más corto, 0 en extensionLockRatio
+        float compFactor = 1f - Mathf.Clamp01(
+            Mathf.InverseLerp(restLengthRatio, extensionLockRatio, CurrentArmRatio));
 
         // ── Lógica de agarre ───────────────────────────────────────────────
         if (!IsGripped)
         {
-            StoredEnergy = 0f;  // Reset al soltar
             if (buttonHeld && surfaceHit)
             {
                 IsGripped = true;
                 gripPoint = hit.point;
                 gripNormal = hit.normal;
-                prevArmLength = currentArmLength;
+                windupDistance = 0f;
+                releaseProgress = 0f;
+                cooldownTimer = 0f;
+                CurrentPhase = PushPhase.Idle;
 
                 Vector2 pen = hit.point - hit.normal * surfacePenetrationOffset;
                 smoothedTargetPos = new Vector3(pen.x, pen.y, ikTarget.position.z);
+                prevMouseShoulderDist = mouseShoulderDist;
+                prevMouseWorld = mouseWorldNow;
+                smoothedMouseVel = Vector2.zero;
             }
         }
         else
@@ -178,11 +251,14 @@ public class ArmProbe : MonoBehaviour
             if (!buttonHeld || distToGrip > maxReach * 1.15f)
             {
                 IsGripped = false;
-                StoredEnergy = 0f;
+                windupDistance = 0f;
+                releaseProgress = 0f;
+                cooldownTimer = 0f;
+                CurrentPhase = PushPhase.Free;
             }
         }
 
-        // ── Posición del IK target ─────────────────────────────────────────
+        // ── IK target ─────────────────────────────────────────────────────
         if (!IsGripped)
         {
             Vector3 desired;
@@ -198,102 +274,171 @@ public class ArmProbe : MonoBehaviour
             }
             smoothedTargetPos = Vector3.Lerp(
                 smoothedTargetPos, desired, Time.deltaTime * ikFollowSpeed);
-            CurrentPhase = surfaceHit ? ArmPhase.Reaching : ArmPhase.Free;
+            CurrentPhase = surfaceHit ? PushPhase.Reaching : PushPhase.Free;
         }
-        // Si está agarrado, el target no se mueve.
 
         ikTarget.position = smoothedTargetPos;
 
-        // ── Motor de compresión / extensión ───────────────────────────────
-        Vector2 appliedForce = Vector2.zero;
+        // ── Máquina de estados de empuje ───────────────────────────────────
+        Vector2 appliedImpulse = Vector2.zero;
+        LastImpulse = 0f;
 
         if (IsGripped)
         {
-            float lengthDelta = currentArmLength - prevArmLength;
-            // lengthDelta < 0 → el brazo se acortó (el cuerpo se acercó → compresión)
-            // lengthDelta > 0 → el brazo se alargó (el cuerpo se alejó → extensión)
+            // Cambio de distancia mouse–hombro en este frame
+            float distDelta = mouseShoulderDist - prevMouseShoulderDist;
 
-            float restLength = maxReach * restLengthRatio;
+            // ── Cooldown ───────────────────────────────────────────────────
+            if (CurrentPhase == PushPhase.Cooldown)
+            {
+                cooldownTimer -= Time.fixedDeltaTime;
+                if (cooldownTimer <= 0f)
+                {
+                    CurrentPhase = PushPhase.Idle;
+                    windupDistance = 0f;
+                    releaseProgress = 0f;
+                }
+            }
+            // ── Locked (brazo demasiado extendido) ─────────────────────────
+            else if (compFactor <= 0f)
+            {
+                CurrentPhase = PushPhase.Locked;
+                windupDistance = 0f;
+            }
+            // ── Idle → espera inicio de windup ─────────────────────────────
+            else if (CurrentPhase == PushPhase.Idle)
+            {
+                // El mouse debe alejarse del hombro más de windupStartThreshold
+                if (distDelta > 0f && mouseShoulderDist > windupStartThreshold)
+                {
+                    CurrentPhase = PushPhase.Windup;
+                    windupDistance = 0f;
+                    windupPeakDist = mouseShoulderDist;
+                    releaseProgress = 0f;
+                }
+            }
+            // ── Windup ─────────────────────────────────────────────────────
+            else if (CurrentPhase == PushPhase.Windup)
+            {
+                float mouseSpeed = smoothedMouseVel.magnitude;
 
-            if (lengthDelta < 0f)
-            {
-                Debug.Log("Acumulando energia comprimida");
-                // COMPRESIÓN: acumular energía proporcional al acortamiento
-                float compression = -lengthDelta;  // positivo
-                StoredEnergy = Mathf.Min(
-                    StoredEnergy + compression * compressionGain,
-                    maxStoredEnergy);
-                CurrentPhase = ArmPhase.Compressing;
-            }
-            else if (lengthDelta > 0f && StoredEnergy > minEnergyToRelease)
-            {
-                Debug.Log("Extendiendo");
-                // EXTENSIÓN con energía acumulada: liberar impulso
-                // Se libera una fracción de la energía por frame → curva suave
-                float energyToRelease = StoredEnergy * energyReleaseRate;
-                StoredEnergy -= energyToRelease;
+                // Cancelar si el mouse se detiene
+                if (mouseSpeed < windupCancelSpeed)
+                {
+                    CurrentPhase = PushPhase.Idle;
+                    windupDistance = 0f;
+                    releaseProgress = 0f;
+                }
+                else if (distDelta > 0f)
+                {
+                    // Mouse sigue alejándose: acumular windup
+                    windupDistance = Mathf.Min(
+                        windupDistance + distDelta, maxWindupDistance);
+                    windupPeakDist = mouseShoulderDist;
+                }
+                else if (distDelta < 0f)
+                {
+                    // Mouse empieza a acercarse: transición a Release
+                    if (windupDistance >= minWindupDistance)
+                    {
+                        CurrentPhase = PushPhase.Release;
+                        releaseProgress = 0f;
+                    }
+                    else
+                    {
+                        // Windup insuficiente → cancelar
+                        CurrentPhase = PushPhase.Idle;
+                        windupDistance = 0f;
+                    }
+                }
 
-                // Dirección de la fuerza: mezcla tangente + normal
-                appliedForce = ComputeDirectionalForce(energyToRelease);
-                physicsBody.ApplyGripForce(appliedForce, gripPoint);
-                CurrentPhase = ArmPhase.Extending;
+                WindupProgress = Mathf.Clamp01(windupDistance / maxWindupDistance);
             }
-            else if (CurrentArmRatio >= extensionLockRatio && StoredEnergy <= minEnergyToRelease)
+            // ── Release ───────────────────────────────────────────────────
+            else if (CurrentPhase == PushPhase.Release)
             {
-                Debug.Log("Brazo extendido sin compresion");
-                // BLOQUEADO: brazo extendido sin compresión previa → sin fuerza
-                CurrentPhase = ArmPhase.Locked;
-            }
-            else
-            {
-                CurrentPhase = ArmPhase.Reaching;
-            }
+                if (distDelta < 0f)
+                {
+                    // Mouse avanzando de vuelta hacia el hombro
+                    releaseProgress += -distDelta;
 
-            prevArmLength = currentArmLength;
+                    if (releaseProgress >= releaseThreshold)
+                    {
+                        // ¡Impulso! — único evento de fuerza por gesto
+                        appliedImpulse = ComputeImpulse(
+                            shoulderPos, windupDistance, compFactor);
+
+                        physicsBody.ApplyGripForce(appliedImpulse, gripPoint);
+                        LastImpulse = appliedImpulse.magnitude;
+
+                        // Reset y Cooldown
+                        cooldownTimer = cooldownTime;
+                        windupDistance = 0f;
+                        releaseProgress = 0f;
+                        WindupProgress = 0f;
+                        CurrentPhase = PushPhase.Cooldown;
+                    }
+                }
+                else if (distDelta > 0f)
+                {
+                    // Mouse volvió a alejarse antes de completar release → re-windup
+                    CurrentPhase = PushPhase.Windup;
+                    releaseProgress = 0f;
+                    // Conservar windupDistance acumulado
+                }
+            }
         }
 
         // ── Feedback al torso ──────────────────────────────────────────────
         if (torsoController != null)
-            torsoController.ReceiveEffort(appliedForce * effortWeight, IsGripped);
+        {
+            Vector2 gripOffset = gripPoint - (Vector2)shoulder.position;
+            torsoController.ReceiveEffort(appliedImpulse * effortWeight, IsGripped, gripOffset);
+        }
+
+        prevMouseShoulderDist = mouseShoulderDist;
     }
 
     // ──────────────────────────────────────────────────────────────────────
     /// <summary>
-    /// Convierte la energía liberada en una fuerza 2D con dos componentes:
-    ///   - Tangencial a la superficie (deslizamiento)
-    ///   - Normal a la superficie (levantamiento)
-    /// La dirección tangencial se infiere de la orientación del brazo en el
-    /// momento del empuje: de la mano hacia el hombro proyectada sobre la tangente.
+    /// Calcula el vector de impulso único a partir del windup acumulado.
+    /// Dirección: mezcla brazo + dirección del gesto (desde el pico del windup).
+    /// Magnitud: proporcional al windupDistance × compressionFactor.
     /// </summary>
-    Vector2 ComputeDirectionalForce(float energy)
+    Vector2 ComputeImpulse(Vector2 shoulderPos, float windup, float compFactor)
     {
-        Vector2 shoulderPos = shoulder.position;
+        // Dirección del brazo: del grip hacia el hombro
+        Vector2 armDir = (shoulderPos - gripPoint).normalized;
 
-        // Dirección del empuje: del punto de agarre hacia el hombro
-        // (el brazo "empuja" el cuerpo lejos de la mano)
-        Vector2 armDir = ((Vector2)shoulder.position - gripPoint).normalized;
+        // Dirección del gesto: usamos la velocidad suavizada del mouse
+        // en el momento del release (apunta hacia el hombro si el gesto es correcto)
+        Vector2 mouseDir = smoothedMouseVel.sqrMagnitude > 0.0001f
+                            ? smoothedMouseVel.normalized
+                            : armDir;
 
-        // Tangente de la superficie
-        Vector2 tangent = new Vector2(gripNormal.y, -gripNormal.x);
+        // Mezcla ponderada y renormalización
+        Vector2 blendDir = (armDir * armDirectionWeight +
+                            mouseDir * (1f - armDirectionWeight));
+        if (blendDir.sqrMagnitude < 0.0001f) blendDir = armDir;
+        blendDir = blendDir.normalized;
 
-        // Proyecciones
-        float tanProj = Vector2.Dot(armDir, tangent);
-        float normProj = Vector2.Dot(armDir, gripNormal);
+        // Magnitud: windup × ganancia × compresión
+        float magnitude = Mathf.Min(
+            windup * impulseGainPerUnit * compFactor,
+            maxImpulse);
 
-        float tanFrac = 1f - verticalForceFraction;
-        Vector2 tanForce = tangent * tanProj * tanFrac;
-        Vector2 normForce = gripNormal * normProj * verticalForceFraction * verticalForceBoost;
+        Vector2 impulse = blendDir * magnitude;
 
-        // Fuerza total escalada por energía liberada y multiplicador
-        Vector2 total = (tanForce + normForce) * energy * forceMultiplier;
+        // Boost vertical sobre componente Y
+        impulse.y *= verticalBoost;
 
-        return total;
+        return impulse;
     }
 
     // ──────────────────────────────────────────────────────────────────────
-    Vector3 GetMouseWorldPos()
+    Vector2 GetMouseWorldPos2D()
     {
-        if (mainCam == null) return Vector3.zero;
+        if (mainCam == null) return Vector2.zero;
         Vector3 mp = Input.mousePosition;
         mp.z = Mathf.Abs(mainCam.transform.position.z);
         return mainCam.ScreenToWorldPoint(mp);
@@ -304,13 +449,13 @@ public class ArmProbe : MonoBehaviour
     {
         if (!Application.isPlaying || shoulder == null) return;
 
-        // Color por fase
         switch (CurrentPhase)
         {
-            case ArmPhase.Compressing: Gizmos.color = Color.cyan; break;
-            case ArmPhase.Extending: Gizmos.color = Color.yellow; break;
-            case ArmPhase.Locked: Gizmos.color = Color.red; break;
-            case ArmPhase.Reaching: Gizmos.color = Color.green; break;
+            case PushPhase.Windup: Gizmos.color = Color.cyan; break;
+            case PushPhase.Release: Gizmos.color = Color.yellow; break;
+            case PushPhase.Cooldown: Gizmos.color = Color.grey; break;
+            case PushPhase.Locked: Gizmos.color = Color.red; break;
+            case PushPhase.Reaching: Gizmos.color = Color.green; break;
             default: Gizmos.color = Color.white; break;
         }
 
@@ -319,15 +464,35 @@ public class ArmProbe : MonoBehaviour
 
         if (IsGripped)
         {
+            Vector2 shoulderPos = shoulder.position;
+
+            // Punto de agarre y normal
             Gizmos.DrawWireSphere(gripPoint, probeRadius + surfacePenetrationOffset);
             Gizmos.color = Color.cyan;
             Gizmos.DrawRay(gripPoint, gripNormal * 0.3f);
 
-            // Barra de energía en scene view
-            Vector3 barStart = (Vector3)gripPoint + Vector3.up * 0.4f;
-            float barLen = StoredEnergy / maxStoredEnergy * 0.8f;
-            Gizmos.color = Color.Lerp(Color.green, Color.red, StoredEnergy / maxStoredEnergy);
-            Gizmos.DrawLine(barStart, barStart + Vector3.right * barLen);
+            // Barra de windup progress (crece horizontalmente desde el grip)
+            if (CurrentPhase == PushPhase.Windup || CurrentPhase == PushPhase.Release)
+            {
+                Vector3 barStart = (Vector3)gripPoint + Vector3.up * 0.5f;
+                float barLen = WindupProgress * 0.8f;
+                Gizmos.color = Color.Lerp(Color.green, Color.magenta, WindupProgress);
+                Gizmos.DrawLine(barStart, barStart + Vector3.right * barLen);
+            }
+
+            // Disco de cooldown (radio decrece con el timer)
+            if (CurrentPhase == PushPhase.Cooldown)
+            {
+                float r = (cooldownTimer / cooldownTime) * 0.2f;
+                Gizmos.color = Color.grey;
+                Gizmos.DrawWireSphere(gripPoint, r);
+            }
+
+            // Vector velocidad del mouse
+            Gizmos.color = Color.magenta;
+            Gizmos.DrawRay(
+                (Vector3)gripPoint + Vector3.up * 0.15f,
+                (Vector3)smoothedMouseVel * 0.12f);
         }
     }
 }
