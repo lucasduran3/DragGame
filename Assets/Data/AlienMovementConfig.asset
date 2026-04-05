@@ -1,0 +1,28 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 826ba9dbb86408043ab824126431c28b, type: 3}
+  m_Name: AlienMovementConfig
+  m_EditorClassIdentifier: Assembly-CSharp::AlienMovementConfig
+  ForcePerUnit: 4
+  MaxForce: 30
+  MinMouseDistance: 0.4
+  MaxSpeed: 8
+  ForceSmoothSpeed: 5
+  GravityScale: 1
+  LinearDrag: 3.5
+  AngularDrag: 2
+  MaxArmReach: 2.5
+  MinArmReach: 0.3
+  ArmLerpSpeed: 8
+  ArmGroundOffset: -0.2
+  FlipThreshold: 2
+  FlipDuration: 0.15
